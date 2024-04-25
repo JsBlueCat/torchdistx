@@ -284,7 +284,7 @@ void Op::materializeWithShape(c10::IntArrayRef shape, const c10::optional<c10::D
       stack_[0] = local_shape; 
     };
 
-    std::vector<std::string> op_white_list{"aten::randn", "aten::rand", "aten::empty", "aten::ones", "aten::zeros", "aten::full" };
+    std::vector<std::string> op_white_list{"aten::randn", "aten::rand", "aten::empty", "aten::ones", "aten::zeros", "aten::full"};
 
     if (std::find(op_white_list.begin(),op_white_list.end(), name()) != op_white_list.end()){
       // if the op is operator
@@ -1274,7 +1274,7 @@ bool isGenByRandomOp(const Tensor& tensor) noexcept{
     detail::TensorRecord& record = detail::getTensorRecord(tensor);
     const detail::OpOutputDescriptor& output_desc = record.output_descriptor();
     auto name = output_desc.node()->op().name();
-    std::vector<std::string> op_white_list{"aten::randn", "aten::rand"};
+    std::vector<std::string> op_white_list{"aten::randn", "aten::rand", "aten::uniform_"};
     return std::find(op_white_list.begin(),op_white_list.end(), name) != op_white_list.end();
   }else{
     return false;
