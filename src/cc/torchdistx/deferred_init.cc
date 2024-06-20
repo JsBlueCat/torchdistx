@@ -174,6 +174,7 @@ class Op {
 
   void materialize();
   void materializeWithShape(c10::IntArrayRef shape, const c10::optional<c10::Device> device);
+  void materializeWithDevice(const c10::optional<c10::Device> device);
 
   std::size_t num_outputs() const noexcept {
     return num_outputs_;
@@ -309,6 +310,32 @@ void Op::materializeWithShape(c10::IntArrayRef shape, const c10::optional<c10::D
   materialized_ = true;
 }
 
+void Op::materializeWithDevice(const c10::optional<c10::Device> device) {
+  if (materialized_) {
+    return;
+  }
+
+  {
+    ThreadLocalStateGuard state_guard{*tls_};
+
+    if(device.has_value()){ // set target device 
+      for (size_t i = 0 ; i < stack_.size(); i++){
+        if(stack_[i].isDevice()){
+          stack_[i] = IValue(device.value());
+        }
+      }
+    }
+
+    fn_(stack_);
+  }
+
+  fn_ = nullptr;
+
+  tls_ = nullopt;
+
+  materialized_ = true;
+}
+
 const Tensor& Op::getOutput(std::size_t idx) const noexcept {
   const Tensor* opt_out = nullptr;
 
@@ -383,6 +410,7 @@ class OpNode {
   void materialize();
   // with changed shape
   void materializeWithShape(c10::IntArrayRef shape, c10::optional<c10::Device> device);
+  void materializeWithDevice(c10::optional<c10::Device> device);
 
  private:
   void buildCallStack();
@@ -558,6 +586,30 @@ void OpNode::materialize() {
     node->materializeArguments();
 
     node->op_.materialize();
+
+    // Make sure that we deallocate parts of the operation graph that are not
+    // needed anymore.
+    node->detachDependencies();
+  }
+
+  call_stack_.clear();
+}
+
+void OpNode::materializeWithDevice(const c10::optional<c10::Device> device) {
+  // Do not try to shortcut this function by checking if the node is already
+  // materialized. A later in-place operation can still change the output of
+  // this node.
+
+  buildCallStack();
+
+  for (OpNode* node : call_stack_) {
+    if (node->op_.materialized()) {
+      continue;
+    }
+
+    node->materializeArguments();
+
+    node->op_.materializeWithDevice(device);
 
     // Make sure that we deallocate parts of the operation graph that are not
     // needed anymore.
@@ -780,6 +832,24 @@ Tensor materialize(const Tensor& fake) {
   const OpOutputDescriptor& output_desc = record.output_descriptor();
 
   output_desc.node()->materialize();
+
+  Tensor out = output_desc.node()->op().getOutput(output_desc.output_index());
+
+  // Unfortunately there is no way for us to track calls to `requires_grad_()`,
+  // so instead we explicitly set `requires_grad` after materialization.
+  if (fake.is_leaf() && fake.requires_grad()) {
+    out.set_requires_grad(true);
+  }
+
+  return out;
+}
+
+Tensor materialize_with_device(const Tensor& fake, const c10::optional<c10::Device> device) {
+  TensorRecord& record = getTensorRecord(fake);
+
+  const OpOutputDescriptor& output_desc = record.output_descriptor();
+
+  output_desc.node()->materializeWithDevice(device);
 
   Tensor out = output_desc.node()->op().getOutput(output_desc.output_index());
 
@@ -1261,6 +1331,13 @@ Tensor materializeTensor(const Tensor& tensor) {
   }
 }
 
+Tensor materializeTensorWithDevice(const at::Tensor& tensor, const c10::optional<c10::Device> device){
+  if (canMaterialize(tensor)) {
+    return detail::materialize_with_device(tensor, device);
+  } else {
+    return tensor;
+  }
+}
 Tensor materializeTensorWithLocalShape(const at::Tensor& tensor, c10::IntArrayRef shape, const c10::optional<c10::Device> device){
   if (canMaterialize(tensor)) {
     return detail::materialize_with_shape(tensor, shape, device);

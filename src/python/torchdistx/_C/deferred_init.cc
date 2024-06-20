@@ -138,6 +138,46 @@ py::object materializeVariableWithLocalShape(const py::object& var, const py::ob
 }
 
 
+// Materializing a tensor in Python requires an extra step. We need to ensure
+// that the materialized tensor has the same Python class (e.g. `Variable` or
+// `Parameter`) as the original tensor.
+// and with dtensor case we need to change the parallized tensor shape
+py::object materializeVariableWithDevice(const py::object& var, const c10::optional<c10::Device> device) {
+  PyObject* naked_var = var.ptr();
+
+  if (!THPVariable_Check(naked_var)) {
+    throw TypeError{"`var` has to be a `Variable`, but got `%s`.", Py_TYPE(naked_var)->tp_name};
+  }
+
+  const Tensor& data = THPVariable_Unpack(naked_var);
+
+  auto materialize = [=](const Tensor& tensor) {
+    py::gil_scoped_release guard{};
+    return materializeTensorWithDevice(tensor, device);
+  };
+
+  Tensor materialized_data = materialize(data);
+
+  // Check if we have really materialized `data`. Materializing a regular tensor
+  // is a no-op, so we can simply return.
+  if (materialized_data.is_same(data)) {
+    return var;
+  }
+
+  // We might have already materialized `data`. Make sure that we preserve its
+  // identity on the Python side and avoid creating a new Python tensor.
+  c10::optional<PyObject*> opt_materialized_var =
+      materialized_data.unsafeGetTensorImpl()->pyobj_slot()->check_pyobj(getPyInterpreter());
+  if (opt_materialized_var.has_value()) {
+    return py::reinterpret_borrow<py::object>(*opt_materialized_var);
+  }
+
+  // Otherwise ensure that our materialized tensor has the same Python class as
+  // the original tensor.
+  return makeVariable(Py_TYPE(naked_var), std::move(materialized_data));
+}
+
+
 }  // namespace
 
 void initDeferredInitFunctions(py::module& m) {
@@ -146,6 +186,7 @@ void initDeferredInitFunctions(py::module& m) {
   m.def("can_materialize", canMaterialize);
   m.def("is_gen_by_random_op", isGenByRandomOp);
   m.def("materialize_tensor", materializeVariable);
+  m.def("materialize_tensor_with_device", materializeVariableWithDevice);
   m.def("materialize_tensor_with_local_shape", materializeVariableWithLocalShape);
 }
 

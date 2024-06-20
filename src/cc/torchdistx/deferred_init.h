@@ -32,6 +32,7 @@ TDX_API bool canMaterialize(const at::Tensor& tensor) noexcept;
 TDX_API bool isGenByRandomOp(const at::Tensor& tensor) noexcept;
 // Materializes `tensor`.
 TDX_API at::Tensor materializeTensor(const at::Tensor& tensor);
+TDX_API at::Tensor materializeTensorWithDevice(const at::Tensor& tensor, const c10::optional<c10::Device> device = {});
 TDX_API at::Tensor materializeTensorWithLocalShape(const at::Tensor& tensor, c10::IntArrayRef shape, const c10::optional<c10::Device> device = {});
 
 // Temporarily disables deferred-init.
